@@ -223,129 +223,355 @@ spider/
 
 ## 9. 트러블슈팅 기록 (만드는 동안 겪은 문제들, 전부)
 
-이 게임을 만드는 과정에서 실제로 부딪혔던 문제와 해결 방법을 **하나도 빼지 않고** 정리했어요.
-"이런 것도 문제가 되는구나" 하는 게 은근히 도움이 될 수 있어서 남겨둡니다.
+이 게임을 만드는 과정에서 실제로 부딪혔던 문제를, **어떤 코드가 왜 잘못됐고 어떻게 고쳤는지**
+코드 위주로 하나도 빼지 않고 정리했어요.
 
 ### 9-1. 실행 환경 관련
 
 **① `file://`로 열면 3D 엔진이 아예 로드 안 됨**
-- **원인**: 처음에 Three.js를 최신 ES 모듈(`import`) 방식으로 불러왔는데, 브라우저는 보안 정책상
-  `file://`로 연 페이지에서는 모듈 스크립트를 CORS 에러로 막아버려요.
-- **해결**: `type="module"` 대신 옛날 방식의 `<script src="...three.min.js">` 클래식 스크립트로
-  바꿈. 대신 Three.js 버전이 클래식 빌드가 존재하는 **r140**으로 고정됨 (그 이후 버전은
-  `GLTFLoader` 같은 예제 스크립트의 클래식(비-모듈) 빌드를 더 이상 안 만들어서).
+
+원인: ES 모듈(`import`) 방식으로 Three.js를 불러왔는데, 브라우저가 `file://`에서 여는 페이지의
+모듈 스크립트를 CORS 정책으로 막아버림.
+
+```html
+<!-- Before: 모듈 방식 — file://에서 CORS 에러로 막힘 -->
+<script type="module">
+  import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js';
+</script>
+
+<!-- After: 클래식 스크립트 — 대신 클래식 빌드가 있는 r140으로 버전 고정 -->
+<script src="https://cdn.jsdelivr.net/npm/three@0.140.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.140.0/examples/js/loaders/GLTFLoader.js"></script>
+```
 
 **② 재시작할 때 카메라가 한두 프레임 벽 속에 파묻힌 것처럼 보임**
-- **원인**: 카메라 위치는 매 프레임 "목표 위치로 천천히 다가가기(lerp)" 방식으로 움직이는데,
-  게임을 재시작해도 카메라의 **시작 위치**는 지난 판이 끝났던 자리(주로 벽에 부딪힌 자리) 그대로였음.
-- **해결**: `resetGame()`에서 카메라 위치를 매번 정확한 시작 위치로 **즉시 스냅**하도록 수정.
+
+원인: 카메라는 매 프레임 `lerp`(목표 위치로 서서히 다가가기)로만 움직이는데, `resetGame()`은
+카메라 위치를 건드리지 않아서 지난 판이 끝난 자리(주로 벽 안)에서부터 다시 서서히 다가옴.
+
+```js
+// resetGame() 안, Before: 카메라 위치를 아예 안 건드림
+camYaw = 0; camPitchLerp = 0;
+// (카메라는 다음 updateVisuals()의 lerp가 알아서 따라잡겠거니 방치)
+
+// After: 새 판 시작 위치로 즉시 스냅
+camYaw = 0; camPitchLerp = 0;
+camera.position.set(player.x, player.y + 5.4, player.z + 13.5);
+camera.lookAt(player.x, player.y + 1.6, player.z - 6);
+```
 
 **③ 미리보기 창 크기가 순간적으로 0이 되면 화면이 깨짐 (`Framebuffer is incomplete` 콘솔 에러)**
-- **원인**: 블룸 효과(후처리)가 화면 크기에 맞는 렌더 타겟(그림 그릴 캔버스)을 만드는데, 창 크기가
-  0으로 보고되는 순간이 있으면 크기가 0인 렌더 타겟이 만들어져서 그 뒤로 계속 깨진 채로 남음.
-- **해결**: 크기 조절 함수에서 가로/세로가 1보다 작으면 그냥 무시하도록 방어 코드 추가.
+
+원인: 블룸 후처리(`EffectComposer`)가 화면 크기에 맞춰 렌더 타겟을 만드는데, 크기 조절 함수가
+가로/세로 값을 검증 없이 그대로 넘겨서, 순간적으로 0이 들어오면 크기 0짜리 렌더 타겟이
+만들어지고 그 뒤로 계속 깨진 채 남음.
+
+```js
+// Before
+function resize(){
+  const w = stage.clientWidth, h = stage.clientHeight;
+  renderer.setSize(w,h,false);
+  composer.setSize(w,h);
+  ...
+}
+
+// After: 0 이하 크기는 그냥 무시
+function resize(){
+  const w = stage.clientWidth, h = stage.clientHeight;
+  if (w < 1 || h < 1) return;
+  renderer.setSize(w,h,false);
+  composer.setSize(w,h);
+  ...
+}
+```
 
 ### 9-2. 조작/입력 관련
 
 **④ 시작하자마자 실수로 더블클릭하면 바로 다이빙해버림**
-- **원인**: 마우스를 누르는 것 하나로 "게임 시작"과 "거미줄 발사"를 둘 다 처리했는데, 사람이
-  화면을 클릭해서 시작한 직후 손이 안 떨어져서 생기는 추가 클릭까지 "발사"로 인식해버림.
-- **해결**: 게임 시작 후 0.5초 동안은 클릭을 무시하는 유예 시간을 둠.
+
+원인: 마우스 down 이벤트 하나로 "게임 시작"과 "거미줄 발사"를 둘 다 처리해서, 시작 클릭 직후
+손이 안 떨어져 생기는 추가 클릭까지 "발사" 시도로 인식함.
+
+```js
+// Before
+function onDown(){
+  if (paused) return;
+  if (state !== 'playing'){ startOrRestart(); return; }
+  attachHeld = true;
+  tryAttach();
+}
+
+// After: 시작 후 0.5초는 무시
+let gameStartAt = 0; // startOrRestart()에서 performance.now()로 기록됨
+function onDown(){
+  if (paused) return;
+  if (state !== 'playing'){ startOrRestart(); return; }
+  if (performance.now() - gameStartAt < 500) return;
+  attachHeld = true;
+  tryAttach();
+}
+```
 
 **⑤ 걷기가 W를 계속 누르고 있어야만 됨 → 너무 불편함**
-- **원인**: 원래는 W를 누르고 있는 동안만 이동하도록 만들었는데, 실제로 해보니 조준하면서 동시에
-  W를 꾹 누르고 있는 게 손이 아프고 불편했음.
-- **해결**: W를 한 번만 톡 눌러도 "계속 걷기" 상태가 켜지도록 변경 + 걷는 속도를 늦춰서 조준할
-  시간을 더 줌 + 가장자리에 가까워지면 경고 효과(깜빡임)를 추가.
+
+원인: `keydown`에서 `keys.forward = true`만 켜고, 실제 이동 로직은 그 값이 `true`인 매 프레임에만
+전진시켜서 손을 떼는 순간 멈춰버림.
+
+```js
+// keydown 핸들러, Before
+else if (e.code === 'KeyW'){ keys.forward = true; }
+
+// After: 서 있는 상태에서 한 번 누르면 "계속 걷기" 상태를 따로 켜둠
+else if (e.code === 'KeyW'){
+  keys.forward = true;
+  if (player && player.mode === 'grounded' && !player.hasLaunched) player.autoWalk = true;
+}
+
+// 이동 로직도 keys.forward뿐 아니라 autoWalk도 같이 확인
+if (keys.forward || player.autoWalk){ /* 전진 */ }
+```
 
 ### 9-3. 웹스윙 물리 버그
 
 **⑥ 스윙을 오래 붙잡고 있으면 앵커 바로 밑에서 완전히 멈춰버리고 다시는 안 움직임**
-- **원인**: 진자 운동을 계산하는 방식(위치 구속 조건 계산) 자체가 매 프레임 아주 조금씩
-  에너지를 깎아먹는 특성이 있어서, 아주 오래 매달려 있으면 결국 속도가 0으로 수렴해버림.
-- **1차 해결(과했음)**: "속도가 9 미만이면 즉시 거미줄을 놓기"로 안전장치를 만들었더니, 이번엔
-  정상적인 스윙도 호(arc)의 꼭대기에서 속도가 잠깐 느려지는 순간마다 거미줄을 놓아버려서
-  "줄이 늘어지면 그대로 떨어진다"는 새 문제가 생김.
-- **최종 해결**: 즉시 판정 대신, **매달린 지 0.4초가 지난 뒤부터 + 속도가 낮은 상태가
-  0.5초 이상 지속될 때만** 자동으로 놓게 바꿈. 정상적인 스윙의 순간적인 감속과, 진짜로
-  멈춰버린 상태를 구분할 수 있게 됨.
+
+원인: 진자 물리를 "위치를 구속 조건에 맞게 강제로 당겨오는" 방식(포지션 기반 다이내믹스)으로
+계산하는데, 이 방식은 매 프레임 아주 조금씩 에너지를 깎아먹는 특성이 있어서 오래 매달려 있으면
+속도가 0으로 수렴함.
+
+```js
+// 1차 해결(과했음): 속도가 낮으면 즉시 릴리즈
+const swingSpd = Math.hypot(player.vx, player.vy, player.vz);
+if (swingSpd < 9) releaseWeb();
+// → 정상적인 스윙도 호(arc) 꼭대기에서 잠깐 느려지는 순간마다 놓여버림
+
+// 최종 해결: "매달린 지 0.4초 이후" + "느린 상태가 0.5초 지속"일 때만 릴리즈
+if (player.swingT > 0.4 && swingSpd < 4){
+  player.swingLowT += dt;
+} else {
+  player.swingLowT = 0;
+}
+player.swingT += dt;
+if (player.swingLowT > 0.5){
+  releaseWeb();
+  player.vz = Math.min(player.vz, -14);
+}
+```
 
 **⑦ 스윙 도중 건물을 살짝 스치기만 해도 무조건 추락으로 바뀜**
-- **원인**: 건물 충돌 처리 함수가 맨 위에서 **무조건** "추락 모드로 전환"부터 실행한 뒤에
-  세부 분기(착지/벽타기/튕기기)를 나누고 있었음. 그런데 건물 간격을 촘촘하게 좁힌 뒤로 스윙
-  궤적이 건물 모서리에 스치는 일이 훨씬 잦아져서, 사실상 스윙할 때마다 걸려 넘어지는 셈이었음.
-- **해결**: 스윙 중에 살짝 스친 경우는 거미줄을 유지한 채 **가볍게 튕겨내기만** 하도록 별도
-  처리 추가. 정면으로 빠르게 부딪힌 경우만 기존처럼 벽타기/추락으로 이어짐.
+
+원인: `resolveBuildingHit(b)`가 함수 맨 위에서 **무조건** `player.mode = 'falling'`부터 실행한
+뒤에야 착지/벽타기 같은 세부 분기로 들어갔음. 건물 간격을 좁힌 뒤로 스윙 궤적이 모서리에
+스치는 일이 잦아지면서, 사실상 스윙할 때마다 이 무조건 분기에 걸려버림.
+
+```js
+// Before
+function resolveBuildingHit(b){
+  player.mode = 'falling';   // 무조건 실행됨 — 스윙 중 살짝 스쳐도 예외 없음
+  player.anchor = null;
+  // ...이후 착지/벽타기 분기...
+}
+
+// After: 스윙 중 가벼운 접촉은 거미줄 유지한 채 튕겨내기만 함
+function resolveBuildingHit(b){
+  const wasSwinging = player.mode === 'swinging';
+  // ...
+  if (wasSwinging && !(speed > 24 && b.h - player.y > 4)){
+    // 위치만 밀어내고 속도를 살짝 반사 — mode, anchor는 그대로 유지
+    if (penX < penZ) player.x = b.x + Math.sign(dx||1) * (hx+0.05);
+    else player.z = b.z + Math.sign(dz||1) * (hz+0.05);
+    return;
+  }
+  player.mode = 'falling';   // 정면으로 빠르게 부딪힌 경우만 여기로
+  player.anchor = null;
+  // ...
+}
+```
 
 ### 9-4. 건물·도시 생성 버그
 
 **⑧ 걸어가다가 갑자기 발밑 건물이 사라져서 그대로 추락**
-- **원인**: "지나간 건물은 치운다"는 로직이 건물의 **중심 좌표**만 보고 판단했는데, 시작 건물이
-  워낙 크게(78×78) 만들어져 있어서, 플레이어가 그 위를 걷고 있는 도중에도 중심 기준으로는
-  이미 "지나간 것"으로 계산되어 건물 자체가 통째로 사라져버림.
-- **해결**: 지금 플레이어가 서 있는 건물은 절대 치우지 않도록 예외 처리.
+
+원인: 지나간 건물을 치우는 `pruneAndGrow()`가 건물의 **중심 z좌표**만 보고 판단하는데, 시작
+건물이 78×78로 커서 그 위를 걷는 도중에도 중심 기준으로는 이미 "지나간 것"으로 계산됨.
+
+```js
+// Before
+function pruneAndGrow(){
+  const behindZ = player.z + 30;
+  for (const b of buildingPool){
+    if (b.active && b.z > behindZ){ b.active = false; /* ... */ }
+  }
+}
+
+// After: 지금 서 있는 건물은 절대 치우지 않음
+function pruneAndGrow(){
+  const behindZ = player.z + 30;
+  for (const b of buildingPool){
+    if (b.active && b !== player.groundB && b.z > behindZ){ b.active = false; /* ... */ }
+  }
+}
+```
 
 **⑨ 건물이 너무 뜸하게 배치되거나, 반대로 너무 빽빽해서 부딪히기만 함**
-- **원인**: 건물 간격을 좁혔더니 충돌이 너무 잦아져서 빈 칸 확률을 34% → 46%로 올렸는데,
-  이번엔 "너무 휑하다"는 피드백을 받음. (그리고 위 ⑦번 버그 때문에 애초에 충돌 자체가
-  너무 가혹하게 처리되고 있었던 것도 한몫함.)
-- **해결**: ⑦번(스윙 그레이즈 튕기기)을 먼저 고친 다음, 빈 칸 확률을 46% → 28%로 다시 낮춰서
-  건물을 더 촘촘하게 되돌림.
 
-**⑩ 랜드마크(첨탑) 건물이 원래 모양으로 안 돌아옴 / 건물 모양 다양화가 적용 안 됨**
-- **원인**: 건물 모양을 박스 하나뿐 아니라 8각 타워로도 다양화했는데, 첨탑 건물 교체 로직이
-  "첨탑이 아니면 무조건 박스 모양으로" 되돌리도록 하드코딩되어 있어서, 8각 타워였던 건물도
-  전부 박스로 바뀌어버림.
-- **해결**: "원래 그 건물 풀(pool) 슬롯이 가지고 있던 모양"으로 되돌리도록 수정.
+원인: 건물 간격을 좁힌 뒤 충돌이 잦아져서 빈 칸 확률을 34% → 46%로 올렸는데(위 ⑦번이 아직
+안 고쳐진 상태였음), 이번엔 "너무 휑하다"는 문제로 바뀜.
+
+```js
+// 1차 (충돌이 무서워서 건물을 줄임)
+const skip = (i === forceOpenIdx) || Math.random() < 0.46;
+
+// 최종 (⑦번을 먼저 고쳐서 그레이즈가 안전해졌으니 다시 촘촘하게)
+const skip = (i === forceOpenIdx) || Math.random() < 0.28;
+```
+
+**⑩ 랜드마크(첨탑) 건물이 원래 모양으로 안 돌아옴**
+
+원인: 건물 모양을 박스 + 8각 타워로 다양화했는데, 첨탑 건물 교체 로직이 "첨탑이 아니면
+무조건 박스로" 하드코딩되어 있어서 8각 타워였던 건물도 박스로 바뀌어버림.
+
+```js
+// Before
+slot.cap.geometry = landmark ? SPIRE_GEO : BOX_GEO;
+
+// After: 그 건물 풀 슬롯이 원래 갖고 있던 모양(baseGeo)으로 되돌림
+slot.cap.geometry = landmark ? SPIRE_GEO : slot.baseGeo;
+```
 
 ### 9-5. 벽타기 / 거리 착지 버그
 
 **⑪ 거리에 착지한 뒤엔 건물에 부딪혀도 벽타기가 전혀 안 됨**
-- **원인**: 건물 충돌 검사 자체가 "이동 모드가 `grounded`가 아닐 때만" 실행되도록 되어 있었는데,
-  전투가 끝나고 거리를 달릴 때도 이동 모드가 정확히 `grounded`라서 이 조건에 걸려 충돌 검사
-  자체가 아예 안 됐음. 건물에 그냥 통과하듯 부딪혀도 아무 반응이 없었던 것.
-- **해결**: "옥상 위(자기가 서 있는 건물)"일 때만 검사를 건너뛰고, **거리를 달릴 때는** 검사하도록
-  조건을 더 정확하게 나눔.
+
+원인: 건물 충돌 검사 자체가 `player.mode !== 'grounded'`일 때만 실행되도록 되어 있었는데,
+전투가 끝나고 거리를 달릴 때도 모드가 정확히 `grounded`라서 검사 자체가 스킵됨.
+
+```js
+// Before
+if (player.invulnT <= 0 && player.mode !== 'wallrun' && player.mode !== 'grounded'){
+  const hitB = findBuildingHit(player.x, player.y, player.z, PLAYER_R*0.55);
+  if (hitB) resolveBuildingHit(hitB);
+}
+
+// After: "옥상 위(자기 건물)"일 때만 스킵, 거리를 달릴 때는 검사함
+const onOwnRoof = player.mode === 'grounded' && !!player.groundB;
+if (player.invulnT <= 0 && player.mode !== 'wallrun' && player.mode !== 'combat' && !onOwnRoof){
+  const hitB = findBuildingHit(player.x, player.y, player.z, PLAYER_R*0.55);
+  if (hitB) resolveBuildingHit(hitB);
+}
+```
 
 ### 9-6. 전투 시스템 버그 · 밸런스
 
 **⑫ 전투 카메라가 플레이어 뒤에서 적을 향해 일직선으로 봐서, 화면에서 둘이 완전히 겹쳐 보임**
-- **원인**: 전투 중 카메라가 항상 적을 정면으로 바라보도록 자동 회전하는데, 그 회전축이 딱
-  플레이어 바로 뒤였어서 플레이어 캐릭터 자체가 적을 가리는 구도가 나옴.
-- **해결**: 카메라를 옆으로(어깨너머 시점) 빼서 플레이어와 적이 화면에서 분리되어 보이게 함.
 
-**⑬ 전투 중 WASD 이동 방향이 화면과 안 맞음 (조작감이 이상함)**
-- **원인**: 카메라는 계속 적을 향해 자동으로 회전하는데, WASD 이동은 회전과 상관없이 고정된
-  월드 좌표축(예: D키 = 항상 +X 방향)으로 처리되고 있었음. 카메라가 돌 때마다 "화면상 앞쪽"과
-  실제 이동 방향이 어긋나 버림.
-- **해결**: WASD를 **카메라(화면) 기준**으로 계산하도록 변경 — W는 항상 "지금 보고 있는 방향"으로
-  이동.
+원인: 전투 중 카메라의 목표 위치가 "플레이어 정후방"으로만 계산되어서, 카메라가 적을 향해
+회전할 때 플레이어 캐릭터 자체가 적 앞을 가리는 구도가 나옴.
+
+```js
+// After: 전투 중엔 카메라를 옆으로(어깨너머 시점) 밀어냄
+if (inCombat){
+  const rightX = Math.cos(camYaw), rightZ = Math.sin(camYaw);
+  desired.x += rightX * 5.5;
+  desired.z += rightZ * 5.5;
+  desired.y += 1.6;
+}
+```
+
+**⑬ 전투 중 WASD 이동 방향이 화면과 안 맞음**
+
+원인: 카메라는 계속 적을 향해 자동 회전하는데, 이동 계산은 회전과 무관한 고정 월드축을
+그대로 썼음(D키 = 항상 +X 방향).
+
+```js
+// Before: 월드 고정 축
+if (keys.left) mx -= 1;
+if (keys.right) mx += 1;
+if (keys.forward) mz -= 1;
+if (keys.back) mz += 1;
+player.vx = (mx/mlen)*moveSpeed;
+player.vz = (mz/mlen)*moveSpeed;
+
+// After: 지금 카메라가 보는 방향(camYaw) 기준으로 회전시켜서 적용
+const fwdInput = -mz, rightInput = mx;
+const wx = rightInput*Math.cos(camYaw) + fwdInput*Math.sin(camYaw);
+const wz = rightInput*Math.sin(camYaw) - fwdInput*Math.cos(camYaw);
+player.vx = (wx/wl)*moveSpeed;
+player.vz = (wz/wl)*moveSpeed;
+```
 
 **⑭ 첫 전투에서 반응할 틈도 없이 바로 맞고 순식간에 죽음**
-- **원인**: 공격 예고 시간이 짧고(0.42~0.55초), 데미지도 높았고(총 18 / 검 26), 착지 직후
-  무적 시간도 0.3초뿐이었음.
-- **해결**: 예고 시간을 0.58~0.7초로 늘리고, 데미지를 약 27% 낮추고(총 13 / 검 19), 착지 직후
-  무적 시간을 0.8초로 늘림.
+
+```js
+// Before
+villain.stateT = villain.type === 'gun' ? 0.55 : 0.42;   // 예고 시간
+player.hp -= villain.type === 'gun' ? 18 : 26;            // 데미지
+player.invulnT = 0.3;                                      // 착지 직후 무적
+
+// After
+villain.stateT = villain.type === 'gun' ? 0.7 : 0.58;
+player.hp -= villain.type === 'gun' ? 13 : 19;
+player.invulnT = 0.8;
+```
 
 **⑮ 거리에 착지할 때마다 무조건 전투가 걸려서 웹스윙의 흐름이 계속 끊김**
-- **원인**: 원래는 "땅에 발이 닿으면 100% 확률로 빌런 등장"이었는데, 실제로 플레이해보니 스윙
-  한두 번(약 27m)만에 벌써 전투에 들어가서 웹스윙을 즐길 틈이 없었음.
-- **해결**: "마지막 전투 이후 55유닛 이상 이동 + 45% 확률"을 둘 다 만족해야만 전투가 걸리도록
-  변경. (시뮬레이션 195회 기준 실제 발생률 24%로 확인 — 착지 3~4번에 1번 꼴)
 
-**⑯ (밸런스 조정은 아니지만) 적이 도형 몇 개를 이어붙인 것처럼 너무 단순하게 생김**
-- **원인**: 처음엔 원기둥(몸통)+구(머리)+캡슐(팔다리)만 조립한 프로시저럴 모델이라 사람처럼
-  안 보였음.
-- **해결**: 주인공에게 쓰던 것과 **완전히 같은 진짜 사람 3D 모델**을 통째로 복제(`SkeletonUtils.clone`)해서
-  색만 보라색으로 바꿔 빌런에게도 적용. 달리기 애니메이션까지 자연스럽게 재생됨.
+```js
+// Before: 착지하면 100% 전투
+if (player.y <= PLAYER_R){
+  player.mode = 'combat';
+  spawnVillain();
+}
+
+// After: 마지막 전투 이후 55유닛 이상 이동 + 45% 확률일 때만
+if (player.y <= PLAYER_R){
+  player.mode = 'grounded';   // 기본은 그냥 안전하게 착지
+  const progressedSince = lastVillainZ - player.z;
+  if (progressedSince > 55 && Math.random() < 0.45){
+    player.mode = 'combat';
+    lastVillainZ = player.z;
+    spawnVillain();
+  }
+}
+```
+
+**⑯ 적이 도형 몇 개를 이어붙인 것처럼 너무 단순하게 생김**
+
+```js
+// Before: 원기둥+구+캡슐 조립
+function makeVillainMesh(){
+  const torso = new THREE.Mesh(new THREE.CylinderGeometry(0.46,0.38,1.05,10), mat);
+  const head  = new THREE.Mesh(new THREE.SphereGeometry(0.4,16,16), skinMat);
+  // ...팔다리도 캡슐...
+}
+
+// After: 주인공과 같은 GLTF 사람 모델을 스켈레톤째로 복제
+const villainModel = THREE.SkeletonUtils.clone(gltf.scene);
+villainModel.traverse(o => {
+  if (o.isMesh && o.material){
+    o.material = o.material.clone();
+    o.material.color.set(0x5a1fb0);   // 보라색으로만 구분
+  }
+});
+villainGltfMixer = new THREE.AnimationMixer(villainModel);
+for (const clip of gltf.animations) villainGltfActions[clip.name] = villainGltfMixer.clipAction(clip);
+```
 
 ### 9-7. 그래픽 회귀
 
 **⑰ 블룸(빛 번짐) 효과를 넣었더니 지붕 같은 큰 밝은 면에서 화면 전체가 하얗게 날아가 버림**
-- **원인**: 작은 발광점(창문 불빛, 앵커)에는 잘 어울리는 세기로 맞췄는데, 그 세기를 그대로
-  옥상처럼 넓고 밝은 면에 적용하니 훨씬 더 크게 번져서 화면 전체가 과다 노출됨.
-- **해결**: 블룸이 반응하는 밝기 기준(threshold)을 올리고, 번지는 세기(strength)와 범위(radius)를
-  낮춰서 작은 광원만 은은하게 반응하도록 재조정.
+
+```js
+// Before: 작은 광원 기준으로 맞춘 값이 큰 밝은 면(옥상)에도 그대로 적용되어 과다 노출
+const bloomPass = new THREE.UnrealBloomPass(
+  new THREE.Vector2(w, h), 0.85, 0.55, 0.72   // strength, radius, threshold
+);
+
+// After: 임계값(threshold)을 올리고 세기/범위를 낮춰서 작은 광원만 반응
+const bloomPass = new THREE.UnrealBloomPass(
+  new THREE.Vector2(w, h), 0.45, 0.35, 0.92
+);
+```
 
 ### 9-8. 테스트 과정에서 발견한 "게임 버그는 아니지만" 특이사항
 
