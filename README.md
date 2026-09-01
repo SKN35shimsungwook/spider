@@ -60,12 +60,19 @@
 
 ## 4. 다른 방법으로도 플레이할 수 있어요
 
-이 게임은 **Streamlit**(파이썬으로 웹앱을 쉽게 만드는 도구)에도 그대로 넣어서 배포할 수 있게 만들어 놨어요. 게임 자체는 여전히 브라우저 안의 JavaScript로 돌아가고, Streamlit은 그 게임을 감싸는 "액자" 역할만 해요.
+이 게임은 **Streamlit**(파이썬으로 웹앱을 쉽게 만드는 도구)에도 그대로 넣어서 배포할 수 있게 만들어 놨어요. 게임 자체는 여전히 브라우저 안의 JavaScript로 돌아가고, Streamlit은 그 게임을 감싸는 "액자" 역할만 해요. 코드는 이 저장소의 [`streamlit/`](./streamlit) 폴더에 있어요.
+
+```bash
+cd streamlit
+pip install -r requirements.txt
+streamlit run main.py
+```
 
 ## 5. 어디서 실행돼요?
 
 - 그냥 `index.html` 파일을 더블클릭해도 돼요 (인터넷 없어도 됨!).
 - 아니면 위에 있는 [플레이 링크](https://skn35shimsungwook.github.io/spider/)를 눌러도 돼요.
+- 파이썬/Streamlit으로 실행하고 싶으면 [`streamlit/`](./streamlit) 폴더를 보세요.
 
 ---
 
